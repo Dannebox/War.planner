@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.3
+// @version      0.3.4
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
 // @homepageURL  https://github.com/Dannebox/War.planner
 // @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
@@ -51,6 +51,23 @@
   function parseUTC(value) {
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value)) return NaN;
     return Date.parse(value + 'Z');
+  }
+  function isAllowedPage(value) {
+    let url;
+    try { url = new URL(value); } catch { return false; }
+    if (url.protocol !== 'https:' || !['www.torn.com','torn.com'].includes(url.hostname)
+      || url.port || url.pathname !== '/factions.php') return false;
+    const params = url.searchParams;
+    // Fail closed for conflicting route parameters; unrelated query extras are fine.
+    if (params.has('tab')) return false;
+    const one = name => params.getAll(name).length === 1 ? params.get(name) : null;
+    const step = one('step');
+    if (step === 'profile') {
+      return /^[1-9]\d*$/.test(one('ID') || '') && !params.has('type') && !url.hash;
+    }
+    if (step !== 'your' || params.has('ID')) return false;
+    const type = one('type');
+    return (type === '1' && !url.hash) || (type === '12' && url.hash === '#/tab=rank');
   }
   function readCard(root, now = Date.now()) {
     const cards = [...root.querySelectorAll('[data-warid]')].filter(el => el.querySelector('[class*="scoreBlock___"]'));
@@ -224,15 +241,63 @@
     api.flush = () => queue;
     return api;
   }
-  const core = { createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
+  const core = { isAllowedPage, createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
   if (typeof module !== 'undefined' && module.exports) { module.exports = core; return; }
   if (window.top !== window.self) return;
-  const startupTag = '[Almanac War Planner v0.3.3]';
+  // Keep one route controller even while its UI is detached on excluded tabs.
+  const controllerKey = '__almanacWarPlannerRouteController';
+  if (window[controllerKey]) { window[controllerKey].refresh(); return; }
+  let started = false, refreshPlanner = null, startupErrorNote = null;
+  let checkedHref = location.href;
+  function routeChanged() {
+    checkedHref = location.href;
+    if (!isAllowedPage(checkedHref)) {
+      startupErrorNote?.remove();
+      startupErrorNote = null;
+    }
+    if (refreshPlanner) { refreshPlanner(); return; }
+    if (started || !isAllowedPage(checkedHref)) return;
+    startupErrorNote?.remove();
+    startupErrorNote = null;
+    started = true;
+    startPlanner().catch(reportStartupFailure);
+  }
+  function reportStartupFailure(error) {
+    started = false;
+    // Remove only our own partially mounted UI so reinjection can retry.
+    for (const id of ['almanac-war-planner','almanac-war-planner-launcher',
+      'awp-mobile-launcher','almanac-war-live-card','almanac-war-inline-style']) {
+      document.getElementById(id)?.remove();
+    }
+    console.error('[Almanac War Planner v0.3.4]', 'Startup failed:', error);
+    if (!isAllowedPage(location.href)) return;
+    const root = document.body || document.documentElement;
+    if (!root || document.getElementById('awp-startup-error')) return;
+    const note = document.createElement('div');
+    note.id = 'awp-startup-error';
+    note.setAttribute('role','alert');
+    note.textContent = 'War Planner could not start: ' + String(error?.message || error);
+    note.style.cssText = 'position:fixed;left:8px;right:8px;bottom:58px;z-index:999991;padding:10px;border:1px solid #3b638c;border-radius:5px;background:#111d2d;color:#ffcf91;font:13px/1.5 Arial,sans-serif;';
+    root.append(note);
+    startupErrorNote = note;
+  }
+  window[controllerKey] = {refresh:routeChanged};
+  window.addEventListener('hashchange',routeChanged);
+  window.addEventListener('popstate',routeChanged);
+  // Query-only History API changes emit no event. On excluded initial routes,
+  // this checks only the URL, without storage, UI or native-page observers.
+  // Unchanged URLs do not retry failed initialization on every tick.
+  setInterval(() => {
+    if (refreshPlanner || location.href !== checkedHref) routeChanged();
+  }, 1000);
+  async function startPlanner() {
+  const startupTag = '[Almanac War Planner v0.3.4]';
   // Native Torn page data is read only while this page is visible and focused.
   // Background forecasts use the scalar values captured by the last active scan.
-  const pageIsActive = () => !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
+  const pageIsActive = () => isAllowedPage(location.href) && !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
   console.info(startupTag, 'Starting');
   if (!document.body) await new Promise(resolve => document.addEventListener('DOMContentLoaded',resolve,{once:true}));
+  if (!isAllowedPage(location.href)) { started = false; return; }
   if (document.getElementById('almanac-war-planner')) return;
   let localStore=null;
   try { localStore=window.localStorage; } catch {}
@@ -242,12 +307,14 @@
     gmSet:typeof GM_setValue === 'function' ? GM_setValue : null,
     local:localStore
   });
+  // Navigation may have changed the allowed route while storage was loading.
+  if (!isAllowedPage(location.href)) { started = false; return; }
   // A second injection may have completed while storage was loading.
   if (document.getElementById('almanac-war-planner')) return;
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.3';
+  host.dataset.awpVersion = '0.3.4';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -273,7 +340,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.3 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.4 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -486,6 +553,17 @@
   const countdownNode = sr.querySelector('.countdown');
   const noteNode = sr.querySelector('.note');
   let lastList = null;
+  let layout = null;
+  function releaseLayout() {
+    if (layout) {
+      // Cached mutation targets let cleanup avoid fresh native-page reads.
+      layout.classes.remove('awp-war-layout');
+      if (layout.gap) layout.style.setProperty('--awp-card-gap',layout.gap,layout.priority);
+      else layout.style.removeProperty('--awp-card-gap');
+      layout = null;
+    }
+    lastList = null;
+  }
   function setText(node,text) {
     if (node.textContent !== text) node.textContent = text;
   }
@@ -496,11 +574,10 @@
     while (warItem && warItem.parentElement !== list) warItem = warItem.parentElement;
     if (!list || !warItem || card.error || !list.isConnected) {
       item.remove();
-      if (lastList) lastList.classList.remove('awp-war-layout');
-      lastList = null;
+      releaseLayout();
       return;
     }
-    if (lastList && lastList !== list) lastList.classList.remove('awp-war-layout');
+    if (lastList && lastList !== list) releaseLayout();
     lastList = list;
     if (!list.classList.contains('awp-war-layout')) {
       // Convert Torn's horizontal item margins to a flex gap. Gaps disappear
@@ -510,6 +587,8 @@
       const margins = nativeCards.map(el => getComputedStyle(el));
       const left = Math.max(0,...margins.map(cs => parseFloat(cs.marginLeft)||0));
       const right = Math.max(0,...margins.map(cs => parseFloat(cs.marginRight)||0));
+      if (!layout) layout = {classes:list.classList, style:list.style,
+        gap:list.style.getPropertyValue('--awp-card-gap'), priority:list.style.getPropertyPriority('--awp-card-gap')};
       list.style.setProperty('--awp-card-gap',(left+right || 10)+'px');
       list.classList.add('awp-war-layout');
     }
@@ -568,7 +647,9 @@
     setText(noteNode, card?.scheduled ? stale ? 'Torn City Time · last known start' : 'Torn City Time' : stale ? 'If scoring stops · last known scores' : 'If scoring stops');
     finishNode.classList.toggle('message', !finish || !countdown?.textContent);
   }
-  return {sync:syncInline, render:updateInline};
+  return {sync:syncInline, render:updateInline,
+    mount:() => { if (!style.isConnected) (document.head || document.documentElement).append(style); },
+    detach:() => { item.remove(); style.remove(); releaseLayout(); }};
 }
   function scan() {
     if (!pageIsActive()) return;
@@ -595,6 +676,7 @@
     inlineCard.sync();
   }
   function setOpen(value) {
+    if (value && !isAllowedPage(location.href)) { safeScan(); return; }
     if (!value) windowPosition.stop();
     open=value; $('panel').hidden=!value;
     launcher.setAttribute('aria-expanded',String(value));
@@ -745,8 +827,29 @@
   $('reset').onclick = () => { state={}; save(); const oldKey=key; key=''; load(oldKey); safeScan(); };
   const inlineCard = initInlineWarCard();
   let lastScanError = '';
+  let routeMounted = true;
+  function suspendRoute() {
+    if (!routeMounted) return;
+    setOpen(false);
+    launcher.remove();
+    document.getElementById('awp-mobile-launcher')?.remove();
+    host.remove();
+    inlineCard.detach();
+    mountObserver.disconnect();
+    key = ''; state = {}; card = null;
+    autoStart = autoBase = lastTimer = null;
+    reconstructed = false; lastPageRead = 0; lastTimerChange = 0;
+    routeMounted = false;
+  }
   function safeScan() {
     try {
+      if (!isAllowedPage(location.href)) { suspendRoute(); return; }
+      if (!routeMounted) {
+        document.body.append(host);
+        inlineCard.mount();
+        mountObserver.observe(document.body,{childList:true,subtree:true});
+        routeMounted = true;
+      }
       if (pageIsActive()) scan();
       else {
         if (!key) {
@@ -781,20 +884,14 @@
     }, 250);
   });
   mountObserver.observe(document.body, { childList: true, subtree: true });
-  setInterval(safeScan, 1000);
   document.addEventListener('visibilitychange',safeScan);
   window.addEventListener('focus',safeScan);
   window.addEventListener('blur',safeScan);
+  refreshPlanner = safeScan;
   safeScan();
   console.info(startupTag, 'Mounted; storage failures are reported in the planner status.');
+  }
+  routeChanged();
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.3]', 'Startup failed:', error);
-  const root = document.body || document.documentElement;
-  if (!root || document.getElementById('awp-startup-error')) return;
-  const note = document.createElement('div');
-  note.id = 'awp-startup-error';
-  note.setAttribute('role','alert');
-  note.textContent = 'War Planner could not start: ' + String(error?.message || error);
-  note.style.cssText = 'position:fixed;left:8px;right:8px;bottom:58px;z-index:999991;padding:10px;border:1px solid #3b638c;border-radius:5px;background:#111d2d;color:#ffcf91;font:13px/1.5 Arial,sans-serif;';
-  root.append(note);
+  console.error('[Almanac War Planner v0.3.4]', 'Route controller failed:', error);
 });
