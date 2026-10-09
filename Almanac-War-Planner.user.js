@@ -1,8 +1,11 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
+// @homepageURL  https://github.com/Dannebox/War.planner
+// @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
+// @downloadURL  https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
 // @match        https://www.torn.com/factions.php*
 // @match        https://torn.com/factions.php*
 // @grant        GM_getValue
@@ -224,7 +227,7 @@
   const core = { createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
   if (typeof module !== 'undefined' && module.exports) { module.exports = core; return; }
   if (window.top !== window.self) return;
-  const startupTag = '[Almanac War Planner v0.3.1]';
+  const startupTag = '[Almanac War Planner v0.3.2]';
   console.info(startupTag, 'Starting');
   if (!document.body) await new Promise(resolve => document.addEventListener('DOMContentLoaded',resolve,{once:true}));
   if (document.getElementById('almanac-war-planner')) return;
@@ -241,7 +244,7 @@
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.1';
+  host.dataset.awpVersion = '0.3.2';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -267,7 +270,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.1 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.2 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -762,7 +765,7 @@
   safeScan(true);
   console.info(startupTag, 'Mounted; storage failures are reported in the planner status.');
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.1]', 'Startup failed:', error);
+  console.error('[Almanac War Planner v0.3.2]', 'Startup failed:', error);
   const root = document.body || document.documentElement;
   if (!root || document.getElementById('awp-startup-error')) return;
   const note = document.createElement('div');
