@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.2
+// @version      0.3.3
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
 // @homepageURL  https://github.com/Dannebox/War.planner
 // @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
@@ -227,7 +227,10 @@
   const core = { createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
   if (typeof module !== 'undefined' && module.exports) { module.exports = core; return; }
   if (window.top !== window.self) return;
-  const startupTag = '[Almanac War Planner v0.3.2]';
+  const startupTag = '[Almanac War Planner v0.3.3]';
+  // Native Torn page data is read only while this page is visible and focused.
+  // Background forecasts use the scalar values captured by the last active scan.
+  const pageIsActive = () => !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
   console.info(startupTag, 'Starting');
   if (!document.body) await new Promise(resolve => document.addEventListener('DOMContentLoaded',resolve,{once:true}));
   if (document.getElementById('almanac-war-planner')) return;
@@ -244,7 +247,7 @@
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.2';
+  host.dataset.awpVersion = '0.3.3';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -270,7 +273,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.2 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.3 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -373,7 +376,8 @@
     renderBonuses(v);
     $('identity').textContent = detected ? `${card.current.name} vs ${card.opponent.name} · #${card.id}` : 'Manual war planner';
     const stale = detected && Date.now() - lastTimerChange > 90000;
-    $('status').textContent = (detected ? `Read from page · ${new Date(lastPageRead || Date.now()).toISOString().slice(11,19)} TCT${stale ? ' · Timer has stopped; refresh Torn to verify live data.' : ''}` : card?.error || 'Waiting for war card.') + (storageProblem || storage.failed ? ' Settings could not be saved.' : '');
+    const paused = !pageIsActive();
+    $('status').textContent = (detected ? `Last page read · ${new Date(lastPageRead || Date.now()).toISOString().slice(11,19)} TCT${paused ? ' · Page inactive; using last known scores.' : stale ? ' · Timer has stopped; refresh Torn to verify live data.' : ''}` : paused ? 'Page reads paused until Torn is visible and focused. Manual planning is available.' : card?.error || 'Waiting for war card.') + (storageProblem || storage.failed ? ' Settings could not be saved.' : '');
     $('detected').textContent = `Start: ${date(autoStart)}${autoStart !== null ? (card?.scheduled ? ' (from start countdown)' : ' (estimated from timer)') : ''}. Original target: ${fmt(autoBase)}${reconstructed ? ' (reconstructed from decayed target; enter exact value if known)' : ''}. Page target: ${fmt(card?.target)}.`;
     $('label-current').textContent = (card?.current?.name || 'Current faction') + ' members';
     $('label-opponent').textContent = (card?.opponent?.name || 'Opponent') + ' members';
@@ -410,7 +414,7 @@
     let forecast = lead === 0 ? 'Scores tied — no decay-only winner forecast.' : end === null ? 'Beyond the 123-hour forecast range — no reliable finish estimate.' : end <= Date.now() ? 'Calculated threshold reached — check Torn for the confirmed result.' : date(end);
     const remainingMs = end !== null ? Math.max(0,end-Date.now()) : null;
     const countdown = remainingMs !== null && end > Date.now() ? `${Math.floor(remainingMs/HOUR)}h ${Math.floor(remainingMs/60000)%60}m ${Math.floor(remainingMs/1000)%60}s remaining` : '';
-    liveResults.innerHTML = `<div class="card"><small>Estimated finish · if scoring stops</small><div class="value" style="font-size:16px">${esc(forecast)}</div><small data-awp-countdown>${esc(countdown)}</small>${stale || document.hidden ? '<small class="warn">Last known scores</small>' : ''}</div>${currentTarget !== null && Math.abs(currentTarget-card.target) > Math.max(2,v.base/100/12) ? '<p class="warn">Check the start time and original target in War inputs.</p>' : ''}`;
+    liveResults.innerHTML = `<div class="card"><small>Estimated finish · if scoring stops</small><div class="value" style="font-size:16px">${esc(forecast)}</div><small data-awp-countdown>${esc(countdown)}</small>${stale || paused ? '<small class="warn">Last known scores</small>' : ''}</div>${currentTarget !== null && Math.abs(currentTarget-card.target) > Math.max(2,v.base/100/12) ? '<p class="warn">Check the start time and original target in War inputs.</p>' : ''}`;
   }
   function initInlineWarCard() {
   const style = document.createElement('style');
@@ -485,7 +489,8 @@
   function setText(node,text) {
     if (node.textContent !== text) node.textContent = text;
   }
-  return function syncInline() {
+  function syncInline() {
+    if (!pageIsActive()) return;
     const list = card?.box?.closest('#faction_war_list_id');
     let warItem = card?.box;
     while (warItem && warItem.parentElement !== list) warItem = warItem.parentElement;
@@ -548,19 +553,25 @@
       button.style.flex = '0 0 '+headerHeight+'px';
       button.style.padding = '0 8px';
     }
-    setText(sr.querySelector('button'),card.scheduled ? 'Upcoming ranked war' : 'Live war');
+    updateInline();
+  }
+  function updateInline() {
+    // Only the planner's own DOM and cached card fields are used here.
+    setText(sr.querySelector('button'),card?.scheduled ? 'Upcoming ranked war' : 'Live war');
     const results = liveResults;
     const finish = results.querySelector('.value');
     const countdown = results.querySelector('[data-awp-countdown]');
     const message = results.querySelector('.warn');
     setText(finishNode, finish?.textContent || message?.textContent || 'Waiting for war data');
     setText(countdownNode, countdown?.textContent || '');
-    const stale = document.hidden || Date.now()-lastTimerChange > 90000;
-    setText(noteNode, card.scheduled ? 'Torn City Time' : stale ? 'If scoring stops · last known scores' : 'If scoring stops');
+    const stale = !pageIsActive() || Date.now()-lastTimerChange > 90000;
+    setText(noteNode, card?.scheduled ? stale ? 'Torn City Time · last known start' : 'Torn City Time' : stale ? 'If scoring stops · last known scores' : 'If scoring stops');
     finishNode.classList.toggle('message', !finish || !countdown?.textContent);
-  };
+  }
+  return {sync:syncInline, render:updateInline};
 }
   function scan() {
+    if (!pageIsActive()) return;
     placeLauncher(document, launcher, el => getComputedStyle(el));
     card = readCard(document);
     lastPageRead = Date.now();
@@ -581,13 +592,13 @@
     }
     populateWinner();
     render();
-    syncInlineCard();
+    inlineCard.sync();
   }
   function setOpen(value) {
     if (!value) windowPosition.stop();
     open=value; $('panel').hidden=!value;
     launcher.setAttribute('aria-expanded',String(value));
-    if(value) { safeScan(true); windowPosition.restore(); }
+    if(value) { safeScan(); windowPosition.restore(); }
   }
   function enableWindowDragging() {
     const positionKey = 'almanac-war-planner:window-position:v1';
@@ -732,11 +743,20 @@
     save(); render();
   };
   $('reset').onclick = () => { state={}; save(); const oldKey=key; key=''; load(oldKey); safeScan(); };
-  const syncInlineCard = initInlineWarCard();
+  const inlineCard = initInlineWarCard();
   let lastScanError = '';
-  function safeScan(force = false) {
+  function safeScan() {
     try {
-      if (!force && document.hidden) { render(); syncInlineCard(); } else scan();
+      if (pageIsActive()) scan();
+      else {
+        if (!key) {
+          const factionId = new URL(location.href).searchParams.get('ID') || 'own';
+          load('almanac-war-planner:v1:manual:'+factionId);
+          populateWinner();
+        }
+        render();
+        inlineCard.render();
+      }
       host.dataset.awpStatus = 'ready';
       lastScanError = '';
     } catch (error) {
@@ -750,22 +770,25 @@
   let mountPending = false;
   const ownIds = new Set(['almanac-war-planner','almanac-war-planner-launcher','awp-mobile-launcher','almanac-war-live-card']);
   const mountObserver = new MutationObserver(records => {
+    if (!pageIsActive()) return;
     // Moving our own launcher/cards must not schedule another mount endlessly.
     if (!records.some(record => [...record.addedNodes,...record.removedNodes].some(node => !ownIds.has(node.id)))) return;
     if (mountPending) return;
     mountPending = true;
     setTimeout(() => {
       mountPending = false;
-      if (!document.hidden) safeScan();
+      safeScan();
     }, 250);
   });
   mountObserver.observe(document.body, { childList: true, subtree: true });
   setInterval(safeScan, 1000);
-  document.addEventListener('visibilitychange', () => { if(!document.hidden) safeScan(); });
-  safeScan(true);
+  document.addEventListener('visibilitychange',safeScan);
+  window.addEventListener('focus',safeScan);
+  window.addEventListener('blur',safeScan);
+  safeScan();
   console.info(startupTag, 'Mounted; storage failures are reported in the planner status.');
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.2]', 'Startup failed:', error);
+  console.error('[Almanac War Planner v0.3.3]', 'Startup failed:', error);
   const root = document.body || document.documentElement;
   if (!root || document.getElementById('awp-startup-error')) return;
   const note = document.createElement('div');
