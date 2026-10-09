@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.4
+// @version      0.3.5
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
 // @homepageURL  https://github.com/Dannebox/War.planner
 // @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
@@ -67,7 +67,8 @@
     }
     if (step !== 'your' || params.has('ID')) return false;
     const type = one('type');
-    return (type === '1' && !url.hash) || (type === '12' && url.hash === '#/tab=rank');
+    return (type === '1' && (!url.hash || url.hash === '#/war/rank'))
+      || (type === '12' && url.hash === '#/tab=rank');
   }
   function readCard(root, now = Date.now()) {
     const cards = [...root.querySelectorAll('[data-warid]')].filter(el => el.querySelector('[class*="scoreBlock___"]'));
@@ -269,7 +270,7 @@
       'awp-mobile-launcher','almanac-war-live-card','almanac-war-inline-style']) {
       document.getElementById(id)?.remove();
     }
-    console.error('[Almanac War Planner v0.3.4]', 'Startup failed:', error);
+    console.error('[Almanac War Planner v0.3.5]', 'Startup failed:', error);
     if (!isAllowedPage(location.href)) return;
     const root = document.body || document.documentElement;
     if (!root || document.getElementById('awp-startup-error')) return;
@@ -291,7 +292,7 @@
     if (refreshPlanner || location.href !== checkedHref) routeChanged();
   }, 1000);
   async function startPlanner() {
-  const startupTag = '[Almanac War Planner v0.3.4]';
+  const startupTag = '[Almanac War Planner v0.3.5]';
   // Native Torn page data is read only while this page is visible and focused.
   // Background forecasts use the scalar values captured by the last active scan.
   const pageIsActive = () => isAllowedPage(location.href) && !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
@@ -314,7 +315,7 @@
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.4';
+  host.dataset.awpVersion = '0.3.5';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -340,7 +341,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.4 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.5 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -893,5 +894,5 @@
   }
   routeChanged();
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.4]', 'Route controller failed:', error);
+  console.error('[Almanac War Planner v0.3.5]', 'Route controller failed:', error);
 });
