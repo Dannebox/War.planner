@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.5
+// @version      0.3.6
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
 // @homepageURL  https://github.com/Dannebox/War.planner
 // @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
@@ -55,8 +55,12 @@
   function isAllowedPage(value) {
     let url;
     try { url = new URL(value); } catch { return false; }
-    if (url.protocol !== 'https:' || !['www.torn.com','torn.com'].includes(url.hostname)
-      || url.port || url.pathname !== '/factions.php') return false;
+    return url.protocol === 'https:' && ['www.torn.com','torn.com'].includes(url.hostname)
+      && !url.port && url.pathname === '/factions.php';
+  }
+  function isWarPage(value) {
+    if (!isAllowedPage(value)) return false;
+    const url = new URL(value);
     const params = url.searchParams;
     // Fail closed for conflicting route parameters; unrelated query extras are fine.
     if (params.has('tab')) return false;
@@ -67,7 +71,7 @@
     }
     if (step !== 'your' || params.has('ID')) return false;
     const type = one('type');
-    return (type === '1' && (!url.hash || url.hash === '#/war/rank'))
+    return (type === '1' && (!url.hash || url.hash === '#/' || url.hash === '#/war/rank'))
       || (type === '12' && url.hash === '#/tab=rank');
   }
   function readCard(root, now = Date.now()) {
@@ -139,26 +143,25 @@
         strip=root.createElement('div'); strip.id='awp-mobile-launcher';
       }
       launcher.className='';
-      launcher.style.cssText='display:inline-flex;align-items:center;justify-content:center;min-height:44px;max-width:100%;box-sizing:border-box;padding:0 10px;cursor:pointer;color:#9fc8ee;background:#203750;border:1px solid #3b638c;border-radius:5px;text-decoration:none;font:13px/1.5 Arial,sans-serif;white-space:normal;overflow-wrap:anywhere;';
+      launcher.style.cssText='display:inline-flex;position:static;float:none;align-items:center;justify-content:center;min-height:44px;max-width:100%;box-sizing:border-box;padding:0 10px;cursor:pointer;color:#9fc8ee;background:#203750;border:1px solid #3b638c;border-radius:5px;text-decoration:none;font:13px/1.5 Arial,sans-serif;white-space:normal;overflow-wrap:anywhere;';
       if (launcher.parentElement !== strip) strip.append(launcher);
-      // On narrow screens, never put the extra link in Torn's header links.
-      // Prefer a full-width strip above the cards, outside clipped ancestors.
-      let safeList = fits(list);
-      for (let ancestor=list?.parentElement; safeList && ancestor && ancestor !== root.body; ancestor=ancestor.parentElement) {
-        const style = computedStyle(ancestor);
-        if (/hidden|clip|auto|scroll/.test(style.overflowY)) safeList=false;
+      // A normal-flow strip scrolls with the page instead of covering mobile controls.
+      strip.style.cssText='display:block;position:static;box-sizing:border-box;max-width:100%;margin:8px 0;clear:both;';
+      const links = root.querySelector('#top-page-links-list');
+      if (links) {
+        if (links.nextElementSibling !== strip) links.after(strip);
+        if (fits(launcher)) return true;
       }
-      if (safeList) {
-        strip.style.cssText='display:block;box-sizing:border-box;max-width:100%;margin:8px 0;clear:both;';
+      if (list) {
         if (strip.nextElementSibling !== list) list.before(strip);
         if (fits(launcher)) return true;
       }
-      // Manual planning remains reachable while Torn mounts/replaces its cards.
-      const height = viewport?.height || view?.innerHeight || root.documentElement.clientHeight;
-      const top = (viewport?.offsetTop || 0) + Math.max(8,height-106);
-      strip.style.cssText='display:block;position:fixed;left:'+(left+8)+'px;top:'+top+'px;max-width:'+Math.max(0,width-16)+'px;z-index:999989;';
-      if (strip.parentElement !== root.body) root.body.append(strip);
-      return true;
+      for (const content of root.querySelectorAll('#content, #content-wrapper, main, .content-wrapper')) {
+        if (strip.parentElement !== content || content.firstElementChild !== strip) content.prepend(strip);
+        if (fits(launcher)) return true;
+      }
+      if (strip.parentElement !== root.body || root.body.firstElementChild !== strip) root.body.prepend(strip);
+      return fits(launcher);
     }
     if (compact) return fallback();
     const warfare = [...root.querySelectorAll('#top-page-links-list a[href*="sid=factionWarfare"], a[href*="sid=factionWarfare"]')].find(fits);
@@ -242,7 +245,7 @@
     api.flush = () => queue;
     return api;
   }
-  const core = { isAllowedPage, createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
+  const core = { isAllowedPage, isWarPage, createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
   if (typeof module !== 'undefined' && module.exports) { module.exports = core; return; }
   if (window.top !== window.self) return;
   // Keep one route controller even while its UI is detached on excluded tabs.
@@ -270,7 +273,7 @@
       'awp-mobile-launcher','almanac-war-live-card','almanac-war-inline-style']) {
       document.getElementById(id)?.remove();
     }
-    console.error('[Almanac War Planner v0.3.5]', 'Startup failed:', error);
+    console.error('[Almanac War Planner v0.3.6]', 'Startup failed:', error);
     if (!isAllowedPage(location.href)) return;
     const root = document.body || document.documentElement;
     if (!root || document.getElementById('awp-startup-error')) return;
@@ -292,10 +295,11 @@
     if (refreshPlanner || location.href !== checkedHref) routeChanged();
   }, 1000);
   async function startPlanner() {
-  const startupTag = '[Almanac War Planner v0.3.5]';
+  const startupTag = '[Almanac War Planner v0.3.6]';
   // Native Torn page data is read only while this page is visible and focused.
   // Background forecasts use the scalar values captured by the last active scan.
   const pageIsActive = () => isAllowedPage(location.href) && !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
+  const canReadWarPage = () => pageIsActive() && isWarPage(location.href);
   console.info(startupTag, 'Starting');
   if (!document.body) await new Promise(resolve => document.addEventListener('DOMContentLoaded',resolve,{once:true}));
   if (!isAllowedPage(location.href)) { started = false; return; }
@@ -315,7 +319,7 @@
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.5';
+  host.dataset.awpVersion = '0.3.6';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -341,7 +345,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.5 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.6 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -385,6 +389,7 @@
   let key = '', state = {}, card = null, autoStart = null, autoBase = null, reconstructed = false;
   let lastPageRead = 0;
   let lastTimer = null, lastTimerChange = 0, open = false, storageProblem = false;
+  let context = '', cacheSignature = '', lastCacheWrite = 0, wasReadingWar = false;
   const fields = ['percent', 'end', 'start', 'base', 'members-current', 'members-opponent', 'winner', 'bonus-faction'];
   function defaultEnd() { return utcInput(nextMatchmaking(Date.now())).slice(0, 16); }
   function save() {
@@ -398,6 +403,65 @@
     if (state.percent === undefined) state.percent = '40';
     if (!state.end) state.end = defaultEnd();
     for (const f of fields) if (f !== 'winner' && f !== 'bonus-faction') $(f).value = state[f] ?? '';
+  }
+  function scalarCard(value) {
+    const side = faction => ({id:faction.id, name:faction.name, score:faction.score, members:faction.members});
+    return {id:value.id, current:side(value.current), opponent:side(value.opponent),
+      target:value.target, duration:value.duration, start:value.start, scheduled:value.scheduled, active:value.active};
+  }
+  function rememberWar(force = false) {
+    if (!context || !card || card.error) return;
+    const snapshot = scalarCard(card);
+    // Timer/read timestamps change every scan; persist scores immediately and
+    // refresh timing metadata periodically or when leaving the live page.
+    const signature = JSON.stringify([key,snapshot.id,snapshot.current,snapshot.opponent,
+      snapshot.target,snapshot.scheduled,snapshot.active,autoStart,autoBase,reconstructed]);
+    if (!force && signature === cacheSignature && Date.now()-lastCacheWrite < 15000) return;
+    try {
+      storage.set('almanac-war-planner:v1:cache:'+context,JSON.stringify({
+        key,card:snapshot,autoStart,autoBase,reconstructed,lastPageRead,lastTimer,lastTimerChange
+      }));
+      cacheSignature = signature;
+      lastCacheWrite = Date.now();
+    } catch { storageProblem = true; }
+  }
+  function validCache(record) {
+    const c = record?.card;
+    const id = value => typeof value === 'string' && /^[1-9]\d*$/.test(value);
+    const side = value => value && id(value.id) && typeof value.name === 'string'
+      && Number.isFinite(value.score) && value.score >= 0
+      && (value.members === null || (Number.isSafeInteger(value.members) && value.members > 0));
+    const time = value => value === null || Number.isFinite(value);
+    return c && id(c.id) && side(c.current) && side(c.opponent)
+      && Number.isFinite(c.target) && c.target > 0 && time(c.start)
+      && (c.duration === null || (Number.isFinite(c.duration) && c.duration >= 0))
+      && typeof c.active === 'boolean' && typeof c.scheduled === 'boolean'
+      && record.key === 'almanac-war-planner:v1:'+c.id+':'+c.current.id
+      && time(record.autoStart) && (record.autoBase === null || (Number.isFinite(record.autoBase) && record.autoBase > 0))
+      && typeof record.reconstructed === 'boolean' && Number.isFinite(record.lastPageRead) && record.lastPageRead > 0
+      && time(record.lastTimer) && Number.isFinite(record.lastTimerChange) && record.lastTimerChange >= 0;
+  }
+  function ensureContext() {
+    const params = new URL(location.href).searchParams;
+    const profileId = params.get('step') === 'profile' ? params.get('ID') : null;
+    const nextContext = /^[1-9]\d*$/.test(profileId || '') ? profileId : 'own';
+    if (context === nextContext) return;
+    rememberWar(true);
+    context = nextContext;
+    key = ''; state = {}; card = null;
+    autoStart = autoBase = lastTimer = null;
+    reconstructed = false; lastPageRead = lastTimerChange = 0;
+    cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false;
+    let record;
+    try { record = JSON.parse(storage.get('almanac-war-planner:v1:cache:'+context,'null')); } catch {}
+    if (validCache(record)) {
+      // Only scalar values are restored; native card elements are never cached.
+      card = scalarCard(record.card);
+      load(record.key);
+      autoStart = record.autoStart; autoBase = record.autoBase; reconstructed = record.reconstructed;
+      lastPageRead = record.lastPageRead; lastTimer = record.lastTimer; lastTimerChange = record.lastTimerChange;
+    } else load('almanac-war-planner:v1:manual:'+context);
+    populateWinner();
   }
   function populateWinner() {
     const choices = card && !card.error ? [card.current, card.opponent] : [{id:'current',name:'Current faction'},{id:'opponent',name:'Opponent'}];
@@ -444,8 +508,10 @@
     renderBonuses(v);
     $('identity').textContent = detected ? `${card.current.name} vs ${card.opponent.name} · #${card.id}` : 'Manual war planner';
     const stale = detected && Date.now() - lastTimerChange > 90000;
-    const paused = !pageIsActive();
-    $('status').textContent = (detected ? `Last page read · ${new Date(lastPageRead || Date.now()).toISOString().slice(11,19)} TCT${paused ? ' · Page inactive; using last known scores.' : stale ? ' · Timer has stopped; refresh Torn to verify live data.' : ''}` : paused ? 'Page reads paused until Torn is visible and focused. Manual planning is available.' : card?.error || 'Waiting for war card.') + (storageProblem || storage.failed ? ' Settings could not be saved.' : '');
+    const paused = !canReadWarPage();
+    const inactive = !pageIsActive();
+    const elsewhere = !isWarPage(location.href);
+    $('status').textContent = (detected ? `Last page read · ${date(lastPageRead)}${inactive ? ' · Page inactive; using last known scores.' : elsewhere ? ' · Last known scores; open the rank tab to refresh.' : stale ? ' · Timer has stopped; refresh Torn to verify live data.' : ''}` : inactive ? 'Page reads paused until Torn is visible and focused. Manual planning is available.' : elsewhere ? 'Open the rank tab to read war data. Manual planning is available.' : card?.error || 'Waiting for war card.') + (storageProblem || storage.failed ? ' Settings could not be saved.' : '');
     $('detected').textContent = `Start: ${date(autoStart)}${autoStart !== null ? (card?.scheduled ? ' (from start countdown)' : ' (estimated from timer)') : ''}. Original target: ${fmt(autoBase)}${reconstructed ? ' (reconstructed from decayed target; enter exact value if known)' : ''}. Page target: ${fmt(card?.target)}.`;
     $('label-current').textContent = (card?.current?.name || 'Current faction') + ' members';
     $('label-opponent').textContent = (card?.opponent?.name || 'Opponent') + ' members';
@@ -511,7 +577,6 @@
       list-style:none!important; overflow:visible!important;
     }
   `;
-  document.head.append(style);
   const item = document.createElement('li');
   item.id = 'almanac-war-live-card';
   const inner = document.createElement('div');
@@ -569,7 +634,7 @@
     if (node.textContent !== text) node.textContent = text;
   }
   function syncInline() {
-    if (!pageIsActive()) return;
+    if (!canReadWarPage()) return;
     const list = card?.box?.closest('#faction_war_list_id');
     let warItem = card?.box;
     while (warItem && warItem.parentElement !== list) warItem = warItem.parentElement;
@@ -644,7 +709,7 @@
     const message = results.querySelector('.warn');
     setText(finishNode, finish?.textContent || message?.textContent || 'Waiting for war data');
     setText(countdownNode, countdown?.textContent || '');
-    const stale = !pageIsActive() || Date.now()-lastTimerChange > 90000;
+    const stale = !canReadWarPage() || Date.now()-lastTimerChange > 90000;
     setText(noteNode, card?.scheduled ? stale ? 'Torn City Time · last known start' : 'Torn City Time' : stale ? 'If scoring stops · last known scores' : 'If scoring stops');
     finishNode.classList.toggle('message', !finish || !countdown?.textContent);
   }
@@ -652,29 +717,37 @@
     mount:() => { if (!style.isConnected) (document.head || document.documentElement).append(style); },
     detach:() => { item.remove(); style.remove(); releaseLayout(); }};
 }
-  function scan() {
-    if (!pageIsActive()) return;
-    placeLauncher(document, launcher, el => getComputedStyle(el));
-    card = readCard(document);
-    lastPageRead = Date.now();
-    // Never reuse another war's settings or inferred target/start.
-    const factionId = new URL(location.href).searchParams.get('ID') || 'own';
-    const newKey = 'almanac-war-planner:v1:' + (card.error ? 'manual:'+factionId : card.id+':'+card.current.id);
-    if (newKey !== key) load(newKey);
-    if (!card.error) {
-      if (card.duration !== lastTimer) { lastTimer = card.duration; lastTimerChange = Date.now(); }
+  function inferWarInputs() {
+    if (card && !card.error) {
       if (card.start !== null && (autoStart === null || state._wasScheduled !== card.scheduled)) { autoStart = card.start; autoBase = null; }
       state._wasScheduled = card.scheduled;
       const referenceStart = $('start').value ? parseUTC($('start').value) : autoStart;
       if (Number.isFinite(referenceStart) && autoBase === null) {
-        const h = (Date.now()-referenceStart)/HOUR;
+        const h = ((lastPageRead || Date.now())-referenceStart)/HOUR;
         if (card.scheduled && h < 0) { autoBase = card.target; reconstructed = false; }
         else if (h >= 0 && h <= 123) { autoBase = card.target / fraction(h); reconstructed = h > 24; }
       }
     }
+  }
+  function scan() {
+    if (!canReadWarPage()) return;
+    card = readCard(document);
+    lastPageRead = Date.now();
+    // Never reuse another war's settings or inferred target/start.
+    const newKey = 'almanac-war-planner:v1:' + (card.error ? 'manual:'+context : card.id+':'+card.current.id);
+    if (newKey !== key) load(newKey);
+    if (!card.error) {
+      if (card.duration !== lastTimer) { lastTimer = card.duration; lastTimerChange = Date.now(); }
+      inferWarInputs();
+      rememberWar();
+    } else if (cacheSignature !== 'empty') {
+      try { storage.set('almanac-war-planner:v1:cache:'+context,'null'); cacheSignature = 'empty'; }
+      catch { storageProblem = true; }
+    }
     populateWinner();
     render();
-    inlineCard.sync();
+    if (!card.error) { inlineCard.mount(); inlineCard.sync(); }
+    else inlineCard.detach();
   }
   function setOpen(value) {
     if (value && !isAllowedPage(location.href)) { safeScan(); return; }
@@ -801,7 +874,7 @@
   shadow.addEventListener('keydown', event => { if(event.key==='Escape') setOpen(false); });
   for (const field of fields) $(field).addEventListener('input', () => {
     state[field]=$(field).value; save();
-    if(field==='start') { autoBase=null; safeScan(); } else render();
+    if(field==='start') { autoBase=null; safeScan(); rememberWar(); } else render();
   });
   for (const hours of [12,6]) $('preset-'+hours).onclick = () => {
     const start = inputs().start;
@@ -825,12 +898,13 @@
     if (state.bonuses && typeof state.bonuses === 'object') delete state.bonuses[state['bonus-faction']];
     save(); render();
   };
-  $('reset').onclick = () => { state={}; save(); const oldKey=key; key=''; load(oldKey); safeScan(); };
+  $('reset').onclick = () => { state={}; save(); const oldKey=key; key=''; load(oldKey); safeScan(); rememberWar(); };
   const inlineCard = initInlineWarCard();
   let lastScanError = '';
   let routeMounted = true;
   function suspendRoute() {
     if (!routeMounted) return;
+    rememberWar(true);
     setOpen(false);
     launcher.remove();
     document.getElementById('awp-mobile-launcher')?.remove();
@@ -840,6 +914,7 @@
     key = ''; state = {}; card = null;
     autoStart = autoBase = lastTimer = null;
     reconstructed = false; lastPageRead = 0; lastTimerChange = 0;
+    context = ''; cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false;
     routeMounted = false;
   }
   function safeScan() {
@@ -847,17 +922,20 @@
       if (!isAllowedPage(location.href)) { suspendRoute(); return; }
       if (!routeMounted) {
         document.body.append(host);
-        inlineCard.mount();
         mountObserver.observe(document.body,{childList:true,subtree:true});
         routeMounted = true;
       }
-      if (pageIsActive()) scan();
+      ensureContext();
+      if (pageIsActive()) placeLauncher(document, launcher, el => getComputedStyle(el));
+      if (canReadWarPage()) { scan(); wasReadingWar = true; }
       else {
-        if (!key) {
-          const factionId = new URL(location.href).searchParams.get('ID') || 'own';
-          load('almanac-war-planner:v1:manual:'+factionId);
-          populateWinner();
+        if (wasReadingWar) { rememberWar(true); wasReadingWar = false; }
+        if (!isWarPage(location.href)) {
+          inlineCard.detach();
+          if (card && !card.error && card.box) card = scalarCard(card);
         }
+        inferWarInputs();
+        populateWinner();
         render();
         inlineCard.render();
       }
@@ -894,5 +972,5 @@
   }
   routeChanged();
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.5]', 'Route controller failed:', error);
+  console.error('[Almanac War Planner v0.3.6]', 'Route controller failed:', error);
 });
