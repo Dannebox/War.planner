@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Almanac War Planner
 // @namespace    https://shiroshura.com/
-// @version      0.3.6
+// @version      0.3.7
 // @description  Ranked-war planning and decay-only finish estimates, using the visible faction war card.
 // @homepageURL  https://github.com/Dannebox/War.planner
 // @updateURL    https://raw.githubusercontent.com/Dannebox/War.planner/main/Almanac-War-Planner.user.js
@@ -18,19 +18,29 @@
 (async function () {
   'use strict';
   const HOUR = 3600000;
-  // Linear interpolation of the documented 1% of ORIGINAL target per hour after 24h.
-  // Estimates stop at 123h: forced endings / ties are not extrapolated.
+  // The first 1% drop is at 24h, followed by one drop per completed hour.
+  // The 123h zero-target / forced-ending boundary is not extrapolated.
   // Reference: https://wiki.torn.com/wiki/Ranked_War
-  const fraction = hours => Math.max(0, 1 - Math.max(0, hours - 24) / 100);
+  const remainingPercent = hours => Math.max(0, 100 - Math.max(0, Math.floor(hours) - 23));
+  const fraction = hours => remainingPercent(hours) / 100;
+  const alignWarStart = value => Number.isFinite(value) ? Math.round(value / HOUR) * HOUR : null;
+  const DECAY_MODEL = 'hourly-v1';
   function targetAt(base, start, end) {
     const h = (end - start) / HOUR;
-    return base > 0 && Number.isFinite(h) && h >= 0 && h <= 123 ? base * fraction(h) : null;
+    return Number.isFinite(base) && base > 0 && Number.isFinite(start) && Number.isFinite(end)
+      && h >= 0 && h < 123 ? base * remainingPercent(h) / 100 : null;
   }
   function finishAt(base, start, lead) {
-    if (!(base > 0) || !Number.isFinite(start) || !(lead > 0)) return null;
+    if (!Number.isFinite(base) || !(base > 0) || !Number.isFinite(start)
+      || !Number.isFinite(lead) || !(lead > 0)) return null;
     if (lead >= base) return start;
-    const hours = 24 + 100 * (1 - lead / base);
-    return hours <= 123 ? start + hours * HOUR : null;
+    // Compare whole percentage steps, allowing only floating-point roundoff.
+    const percent = lead / base * 100;
+    const tolerance = Number.EPSILON * 100 * 4;
+    for (let hours = 24; hours < 123; hours++) {
+      if (percent + tolerance >= remainingPercent(hours)) return start + hours * HOUR;
+    }
+    return null;
   }
   function plan(base, start, end, percent) {
     const target = targetAt(base, start, end);
@@ -95,7 +105,8 @@
     const scheduled = !!box.querySelector('[class*="statsBox___"][class*="waiting___"]');
     const active = !scheduled && (current.score > 0 || opponent.score > 0 || /YOUR FACTION IS IN A WAR/i.test(root.querySelector('.f-msg')?.textContent || ''));
     return { id: box.getAttribute('data-warid'), current, opponent, target, duration,
-      start: duration !== null ? (scheduled ? now + duration : active ? now - duration : null) : null, scheduled, active, box };
+      start: duration !== null && (scheduled || active) ? alignWarStart(scheduled ? now + duration : now - duration) : null,
+      scheduled, active, box };
   }
   function nextMatchmaking(reference) {
     const t = new Date(reference);
@@ -245,7 +256,7 @@
     api.flush = () => queue;
     return api;
   }
-  const core = { isAllowedPage, isWarPage, createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
+  const core = { isAllowedPage, isWarPage, createCompatibleStorage, nextMatchmaking, bonusTotal, memberShare, placeLauncher, fraction, alignWarStart, targetAt, finishAt, plan, number, elapsed, utcInput, parseUTC, readCard };
   if (typeof module !== 'undefined' && module.exports) { module.exports = core; return; }
   if (window.top !== window.self) return;
   // Keep one route controller even while its UI is detached on excluded tabs.
@@ -273,7 +284,7 @@
       'awp-mobile-launcher','almanac-war-live-card','almanac-war-inline-style']) {
       document.getElementById(id)?.remove();
     }
-    console.error('[Almanac War Planner v0.3.6]', 'Startup failed:', error);
+    console.error('[Almanac War Planner v0.3.7]', 'Startup failed:', error);
     if (!isAllowedPage(location.href)) return;
     const root = document.body || document.documentElement;
     if (!root || document.getElementById('awp-startup-error')) return;
@@ -295,7 +306,7 @@
     if (refreshPlanner || location.href !== checkedHref) routeChanged();
   }, 1000);
   async function startPlanner() {
-  const startupTag = '[Almanac War Planner v0.3.6]';
+  const startupTag = '[Almanac War Planner v0.3.7]';
   // Native Torn page data is read only while this page is visible and focused.
   // Background forecasts use the scalar values captured by the last active scan.
   const pageIsActive = () => isAllowedPage(location.href) && !document.hidden && typeof document.hasFocus === 'function' && document.hasFocus();
@@ -319,7 +330,7 @@
 
   const host = document.createElement('div');
   host.id = 'almanac-war-planner';
-  host.dataset.awpVersion = '0.3.6';
+  host.dataset.awpVersion = '0.3.7';
   host.dataset.awpStatus = 'starting';
   const shadow = host.attachShadow({ mode: 'open' });
   shadow.innerHTML = `<style>
@@ -345,7 +356,7 @@
     }
   </style>
   <section id="panel" hidden aria-label="Almanac War Planner">
-    <header><strong>Almanac War Planner <small>v0.3.6 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
+    <header><strong>Almanac War Planner <small>v0.3.7 · All times TCT / UTC</small></strong><button id="close" aria-label="Close planner">×</button></header>
     <main><div id="identity"></div><div id="status"></div>
       <div id="planning">
         <label for="winner">Planned winner</label><select id="winner"></select>
@@ -389,7 +400,7 @@
   let key = '', state = {}, card = null, autoStart = null, autoBase = null, reconstructed = false;
   let lastPageRead = 0;
   let lastTimer = null, lastTimerChange = 0, open = false, storageProblem = false;
-  let context = '', cacheSignature = '', lastCacheWrite = 0, wasReadingWar = false;
+  let context = '', cacheSignature = '', lastCacheWrite = 0, wasReadingWar = false, needsCacheUpgrade = false;
   const fields = ['percent', 'end', 'start', 'base', 'members-current', 'members-opponent', 'winner', 'bonus-faction'];
   function defaultEnd() { return utcInput(nextMatchmaking(Date.now())).slice(0, 16); }
   function save() {
@@ -419,10 +430,11 @@
     if (!force && signature === cacheSignature && Date.now()-lastCacheWrite < 15000) return;
     try {
       storage.set('almanac-war-planner:v1:cache:'+context,JSON.stringify({
-        key,card:snapshot,autoStart,autoBase,reconstructed,lastPageRead,lastTimer,lastTimerChange
+        model:DECAY_MODEL,key,card:snapshot,autoStart,autoBase,reconstructed,lastPageRead,lastTimer,lastTimerChange
       }));
       cacheSignature = signature;
       lastCacheWrite = Date.now();
+      needsCacheUpgrade = false;
     } catch { storageProblem = true; }
   }
   function validCache(record) {
@@ -451,15 +463,26 @@
     key = ''; state = {}; card = null;
     autoStart = autoBase = lastTimer = null;
     reconstructed = false; lastPageRead = lastTimerChange = 0;
-    cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false;
+    cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false; needsCacheUpgrade = false;
     let record;
     try { record = JSON.parse(storage.get('almanac-war-planner:v1:cache:'+context,'null')); } catch {}
     if (validCache(record)) {
       // Only scalar values are restored; native card elements are never cached.
       card = scalarCard(record.card);
+      card.start = alignWarStart(card.start);
       load(record.key);
-      autoStart = record.autoStart; autoBase = record.autoBase; reconstructed = record.reconstructed;
+      state._wasScheduled = card.scheduled;
+      autoStart = alignWarStart(record.autoStart);
+      // Retain a legacy original only if its snapshot agrees with hourly decay.
+      // v0.3.6 also labelled the first 24h drop as "not reconstructed".
+      const legacyTarget = card.scheduled ? record.autoBase
+        : card.duration !== null ? targetAt(record.autoBase,0,card.duration) : null;
+      const legacyMatches = !record.reconstructed && legacyTarget !== null
+        && Math.abs(legacyTarget-card.target) <= Number.EPSILON * Math.max(1,card.target) * 8;
+      autoBase = record.model === DECAY_MODEL || legacyMatches ? record.autoBase : null;
+      reconstructed = record.reconstructed;
       lastPageRead = record.lastPageRead; lastTimer = record.lastTimer; lastTimerChange = record.lastTimerChange;
+      needsCacheUpgrade = record.model !== DECAY_MODEL || card.start !== record.card.start || autoStart !== record.autoStart;
     } else load('almanac-war-planner:v1:manual:'+context);
     populateWinner();
   }
@@ -518,7 +541,7 @@
     const error = '<p class="warn">Enter the original target and war start under War inputs, or open a live ranked-war card.</p>';
     if (!valid(v)) { $('plan-results').innerHTML = error; liveResults.innerHTML = error; return; }
     const p = v.percent !== null ? plan(v.base, v.start, v.end, v.percent) : null;
-    if (!p) $('plan-results').innerHTML = '<p class="warn">Choose a finish between the start and 123 hours later, and a loser percentage from 0 to 100.</p>';
+    if (!p) $('plan-results').innerHTML = '<p class="warn">Choose a finish from the start to before the 123-hour boundary, and a loser percentage from 0 to 100.</p>';
     else {
       const currentWins = state.winner === (card?.current?.id || 'current');
       const wm = currentWins ? v.cm : v.om, lm = currentWins ? v.om : v.cm;
@@ -534,7 +557,7 @@
       const ls = currentWins ? card?.opponent?.score : card?.current?.score;
       const remaining = detected ? `<p class="muted">Remaining to plan: winner ${fmt(Math.max(0,p.winner-ws))} · loser ${fmt(Math.max(0,p.loser-ls))}.</p>${ws > p.winner || ls > p.loser ? '<p class="warn">A faction has already exceeded its planned score. These totals will not produce the chosen finish unless the scores are rebalanced.</p>' : ''}` : '';
       // PDA normalizes typographic quotes before parsing; use HTML entities in quoted HTML.
-      $('plan-results').innerHTML = `<div class="card"><small>Required lead at chosen finish</small><div class="value">${fmt(p.target)}</div></div><div class="grid"><div class="card"><small>Winner score · ${esc(winnerName || 'Selected winner')}</small><div class="value">${fmt(p.winner)}</div><small>${fmt(memberShare(p.winner,wb,wm))} per member${wb ? ' · after bonuses' : ''}</small></div><div class="card"><small>Loser score · ${fmt(v.percent)}% of original target</small><div class="value">${fmt(p.loser)}</div><small>${fmt(memberShare(p.loser,lb,lm))} per member${lb ? ' · after bonuses' : ''}</small></div></div>${wb > p.winner || lb > p.loser ? '<p class="warn">Planned bonuses exceed a faction&rsquo;s total. Reduce the bonuses or adjust the plan.</p>' : ''}<table><thead><tr><th>Finish (TCT)</th><th>Lead</th><th>Winner total</th></tr></thead><tbody>${rows}</tbody></table>${remaining}${v.end-v.start <= 24*HOUR ? '<p class="warn">The target is unchanged during the first 24h. Scoring must be timed to the chosen finish; decay cannot select an exact time.</p>' : ''}${v.end < Date.now() ? '<p class="warn">The chosen finish is in the past.</p>' : ''}`;
+      $('plan-results').innerHTML = `<div class="card"><small>Required lead at chosen finish</small><div class="value">${fmt(p.target)}</div></div><div class="grid"><div class="card"><small>Winner score · ${esc(winnerName || 'Selected winner')}</small><div class="value">${fmt(p.winner)}</div><small>${fmt(memberShare(p.winner,wb,wm))} per member${wb ? ' · after bonuses' : ''}</small></div><div class="card"><small>Loser score · ${fmt(v.percent)}% of original target</small><div class="value">${fmt(p.loser)}</div><small>${fmt(memberShare(p.loser,lb,lm))} per member${lb ? ' · after bonuses' : ''}</small></div></div>${wb > p.winner || lb > p.loser ? '<p class="warn">Planned bonuses exceed a faction&rsquo;s total. Reduce the bonuses or adjust the plan.</p>' : ''}<table><thead><tr><th>Finish (TCT)</th><th>Lead</th><th>Winner total</th></tr></thead><tbody>${rows}</tbody></table>${remaining}${v.end-v.start < 24*HOUR ? '<p class="warn">The target is unchanged before the first 24h drop. Scoring must be timed to the chosen finish; decay cannot select an exact time.</p>' : (v.end-v.start)%HOUR !== 0 ? '<p class="muted">Targets change on hourly war ticks. A finish between ticks requires timed scoring.</p>' : ''}${v.end < Date.now() ? '<p class="warn">The chosen finish is in the past.</p>' : ''}`;
     }
     if (detected && card.scheduled) {
       const remaining = Math.max(0, v.start-Date.now());
@@ -545,7 +568,7 @@
     const lead = card.current.score - card.opponent.score;
     const end = finishAt(v.base, v.start, Math.abs(lead));
     const currentTarget = targetAt(v.base, v.start, Date.now());
-    let forecast = lead === 0 ? 'Scores tied — no decay-only winner forecast.' : end === null ? 'Beyond the 123-hour forecast range — no reliable finish estimate.' : end <= Date.now() ? 'Calculated threshold reached — check Torn for the confirmed result.' : date(end);
+    let forecast = lead === 0 ? 'Scores tied — no decay-only winner forecast.' : end === null ? 'No positive-target finish before 123h — no reliable finish estimate.' : end <= Date.now() ? 'Calculated threshold reached — check Torn for the confirmed result.' : date(end);
     const remainingMs = end !== null ? Math.max(0,end-Date.now()) : null;
     const countdown = remainingMs !== null && end > Date.now() ? `${Math.floor(remainingMs/HOUR)}h ${Math.floor(remainingMs/60000)%60}m ${Math.floor(remainingMs/1000)%60}s remaining` : '';
     liveResults.innerHTML = `<div class="card"><small>Estimated finish · if scoring stops</small><div class="value" style="font-size:16px">${esc(forecast)}</div><small data-awp-countdown>${esc(countdown)}</small>${stale || paused ? '<small class="warn">Last known scores</small>' : ''}</div>${currentTarget !== null && Math.abs(currentTarget-card.target) > Math.max(2,v.base/100/12) ? '<p class="warn">Check the start time and original target in War inputs.</p>' : ''}`;
@@ -723,9 +746,11 @@
       state._wasScheduled = card.scheduled;
       const referenceStart = $('start').value ? parseUTC($('start').value) : autoStart;
       if (Number.isFinite(referenceStart) && autoBase === null) {
-        const h = ((lastPageRead || Date.now())-referenceStart)/HOUR;
+        const h = !$('start').value && card.duration !== null
+          ? (card.scheduled ? -card.duration : card.duration)/HOUR
+          : ((lastPageRead || Date.now())-referenceStart)/HOUR;
         if (card.scheduled && h < 0) { autoBase = card.target; reconstructed = false; }
-        else if (h >= 0 && h <= 123) { autoBase = card.target / fraction(h); reconstructed = h > 24; }
+        else if (h >= 0 && h < 123) { autoBase = card.target * 100 / remainingPercent(h); reconstructed = h >= 24; }
       }
     }
   }
@@ -914,7 +939,7 @@
     key = ''; state = {}; card = null;
     autoStart = autoBase = lastTimer = null;
     reconstructed = false; lastPageRead = 0; lastTimerChange = 0;
-    context = ''; cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false;
+    context = ''; cacheSignature = ''; lastCacheWrite = 0; wasReadingWar = false; needsCacheUpgrade = false;
     routeMounted = false;
   }
   function safeScan() {
@@ -935,6 +960,7 @@
           if (card && !card.error && card.box) card = scalarCard(card);
         }
         inferWarInputs();
+        if (needsCacheUpgrade) rememberWar();
         populateWinner();
         render();
         inlineCard.render();
@@ -972,5 +998,5 @@
   }
   routeChanged();
 })().catch(error => {
-  console.error('[Almanac War Planner v0.3.6]', 'Route controller failed:', error);
+  console.error('[Almanac War Planner v0.3.7]', 'Route controller failed:', error);
 });
